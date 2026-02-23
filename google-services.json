@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "510629881695",
+    "firebase_url": "https://tindak-8401f-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "tindak-8401f",
+    "storage_bucket": "tindak-8401f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:510629881695:android:7eece53a464f51a41af8ea",
+        "android_client_info": {
+          "package_name": "tindak.app1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDLkjn7hnSryPKvFAS3F4c1vCLE6mjEvdA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
