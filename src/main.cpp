@@ -1,31 +1,73 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 
 #define TINY_GSM_MODEM_SIM7000
 #define TINY_GSM_RX_BUFFER 1024
-
 #include <TinyGsmClient.h>
 
-// LilyGO T-SIM7000G Pinout
-#define UART_BAUD   115200
-#define PIN_DTR     25
-#define PIN_TX      27
-#define PIN_RX      26
-#define PWR_PIN     4
+// ================= WIFI =================
+#define WIFI_SSID     "NetPay"
+#define WIFI_PASSWORD "netpay123"
 
-#define LED_PIN     12
+// ================= FIREBASE =================
+#define FIREBASE_DB_URL "https://tindak-8401f-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define LOCATION_PATH "/esp32-lilygo/location.json"
+
+// ================= SIM7000 PINS =================
+#define UART_BAUD 115200
+#define PIN_TX    27
+#define PIN_RX    26
+#define PWR_PIN   4
 
 #define SerialMon Serial
 #define SerialAT  Serial1
 
 TinyGsm modem(SerialAT);
 
-// ---- SETTINGS ----
-const unsigned long GPS_INTERVAL_MS = 1000;   // print every 1s (change as you want)
-const unsigned long GPS_WARMUP_MS   = 15000;  // wait for first fix attempt
+// HTTPS
+WiFiClientSecure client;
+HTTPClient https;
 
-unsigned long lastGpsMs = 0;
-bool gpsReady = false;
+unsigned long lastSend = 0;
+const unsigned long SEND_INTERVAL = 5000; // send every 5 seconds
 
+// ================= WIFI =================
+void connectWiFi() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected!");
+  Serial.println(WiFi.localIP());
+}
+
+// ================= FIREBASE SEND =================
+void writeLocationRaw(String latitude, String longitude) {
+
+  String json = "{";
+  json += "\"latitude\":\"" + latitude + "\",";
+  json += "\"longitude\":\"" + longitude + "\"";
+  json += "}";
+
+  String url = String(FIREBASE_DB_URL) + LOCATION_PATH;
+
+  https.begin(client, url);
+  https.addHeader("Content-Type", "application/json");
+
+  int httpCode = https.PUT(json);
+
+  Serial.println("---- Firebase PUT ----");
+  Serial.println(json);
+  Serial.printf("HTTP: %d\n", httpCode);
+
+  https.end();
+}
+
+// ================= GPS =================
 void powerOnModem() {
   pinMode(PWR_PIN, OUTPUT);
   digitalWrite(PWR_PIN, HIGH);
@@ -34,91 +76,63 @@ void powerOnModem() {
 }
 
 bool gpsPower(bool on) {
-  // SIM7000G GPS power via GPIO4:
-  // AT+SGPIO=0,4,1,1  -> ON
-  // AT+SGPIO=0,4,1,0  -> OFF
   modem.sendAT(String("+SGPIO=0,4,1,") + (on ? "1" : "0"));
-  if (modem.waitResponse(10000L) != 1) {
-    SerialMon.println(on ? " SGPIO GPS ON failed " : " SGPIO GPS OFF failed ");
-    return false;
-  }
-  return true;
+  return modem.waitResponse(10000L) == 1;
 }
 
-void printGpsOnce() {
-  float lat = 0, lon = 0, speed = 0, alt = 0, accuracy = 0;
-  int vsat = 0, usat = 0;
-  int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
-
-  if (modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat, &accuracy,
-                   &year, &month, &day, &hour, &min, &sec)) {
-
-    SerialMon.println("✅ GPS Fix!");
-    SerialMon.println("Latitude: " + String(lat, 8) + "\tLongitude: " + String(lon, 8));
-    SerialMon.println("Speed: " + String(speed) + "\tAltitude: " + String(alt));
-    SerialMon.println("Visible Satellites: " + String(vsat) + "\tUsed Satellites: " + String(usat));
-    SerialMon.println("Accuracy: " + String(accuracy));
-    SerialMon.println("Date: " + String(year) + "-" + String(month) + "-" + String(day));
-    SerialMon.println("Time: " + String(hour) + ":" + String(min) + ":" + String(sec));
-
-    // optional raw string
-    String gps_raw = modem.getGPSraw();
-    SerialMon.println("RAW: " + gps_raw);
-  } else {
-    SerialMon.println("⏳ No GPS fix yet...");
-  }
-
-  SerialMon.println("----------------------------------");
-}
-
+// ================= SETUP =================
 void setup() {
   SerialMon.begin(115200);
-  delay(200);
-  SerialMon.println("Place your board outside to catch satellite signal");
 
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // LED off (depending on board wiring)
+  // WiFi
+  connectWiFi();
+  client.setInsecure();
 
+  // Start modem
   powerOnModem();
-
   SerialAT.begin(UART_BAUD, SERIAL_8N1, PIN_RX, PIN_TX);
 
-  SerialMon.println("Initializing modem...");
-  if (!modem.restart()) {
-    SerialMon.println("Failed to restart modem, continuing...");
-  }
+  Serial.println("Initializing modem...");
+  modem.restart();
 
-  String modemName = modem.getModemName();
-  delay(200);
-  SerialMon.println("Modem Name: " + modemName);
-
-  String modemInfo = modem.getModemInfo();
-  delay(200);
-  SerialMon.println("Modem Info: " + modemInfo);
-
-  // Turn ON GPS power + GPS only once
-  SerialMon.println("Turning on GPS power...");
+  Serial.println("Turning GPS power ON...");
   gpsPower(true);
 
-  SerialMon.println("Enabling GPS...");
+  Serial.println("Enabling GPS...");
   modem.enableGPS();
 
-  SerialMon.println("Warming up GPS...");
-  delay(GPS_WARMUP_MS);
-
-  gpsReady = true;
-  lastGpsMs = millis();
+  Serial.println("Waiting GPS warmup...");
+  delay(15000);
 }
 
+// ================= LOOP =================
 void loop() {
-  modem.maintain(); // keep modem background tasks running
 
-  if (!gpsReady) return;
+  modem.maintain();
 
-  unsigned long now = millis();
-  if (now - lastGpsMs >= GPS_INTERVAL_MS) {
-    lastGpsMs = now;
-    SerialMon.println("Requesting current GPS...");
-    printGpsOnce();
+  if (millis() - lastSend >= SEND_INTERVAL) {
+    lastSend = millis();
+
+    float lat = 0, lon = 0, speed, alt, accuracy;
+    int vsat, usat;
+    int year, month, day, hour, min, sec;
+
+    Serial.println("Getting GPS...");
+
+    if (modem.getGPS(&lat, &lon, &speed, &alt, &vsat, &usat, &accuracy,
+                     &year, &month, &day, &hour, &min, &sec)) {
+
+      String latitude  = String(lat, 8);
+      String longitude = String(lon, 8);
+
+      Serial.println("GPS FIX!");
+      Serial.println(latitude + ", " + longitude);
+
+      // Send to Firebase
+      writeLocationRaw(latitude, longitude);
+    }
+    else {
+      Serial.println("No GPS fix yet...");
+    }
   }
 }
